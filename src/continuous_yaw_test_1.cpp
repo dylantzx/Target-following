@@ -1,8 +1,19 @@
 /**
- * @file continuous_yaw.cpp
- * @brief Offboard control example node, written with MAVROS version 0.19.x, PX4 Pro Flight
- * Stack and tested in Gazebo SITL
- */
+ * 
+ * This target following code is based on a simple algorithm of calculating the angle required to yaw
+ * then yaw at a constant speed. 
+ * 
+ * Expected to be very jerk-ish and may not accommodate to different velocities of target
+ * 
+ * Values are currently based off gazebo values 
+ * 
+ * How to use code:
+ * 1) After compiling with catkin build
+ * 2) source setup.bash file in catkin_ws/devel
+ * 3) rosrun continuous_yaw continuous_yaw (Change file name accordingly whereever required)
+ * 4) Change vehicle 1 in QGC to offboard mode
+ * 
+ **/
 
 #include <ros/ros.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -18,23 +29,53 @@
 
 
 mavros_msgs::State current_state;
+gazebo_msgs::ModelStates current_pos;
+
+int iris = 0;
+int typhoon = 0;
+
+double curr_roll, curr_pitch, curr_yaw;
+double degree_of_error = 0.1;
+
+void get_model_order(){
+    ROS_INFO("Model order: (1) %s (2) %s", current_pos.name[1].c_str(), current_pos.name[2].c_str());
+
+    if (strcmp(current_pos.name[1].c_str(),"iris1") == 0){
+        iris = 1;
+        typhoon = 2;
+    }
+    else{
+        iris = 2;
+        typhoon = 1;
+    }
+
+    ROS_INFO("Iris: %d Typhoon: %d", iris, typhoon);
+}
+
+void quat_to_euler(gazebo_msgs::ModelStates current_pos){
+    tf::Quaternion q(
+        current_pos.pose[typhoon].orientation.x,
+        current_pos.pose[typhoon].orientation.x,
+        current_pos.pose[typhoon].orientation.z,
+        current_pos.pose[typhoon].orientation.w
+    );
+    tf::Matrix3x3 m(q);
+    m.getRPY(curr_roll, curr_pitch, curr_yaw); 
+}
+
 void state_cb(const mavros_msgs::State::ConstPtr& msg){
     current_state = *msg;
 }
 
-gazebo_msgs::ModelStates current_pos;
-double curr_roll, curr_pitch, curr_yaw;
 void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
     current_pos = *msg;
     
-    tf::Quaternion q(
-        current_pos.pose[1].orientation.x,
-        current_pos.pose[1].orientation.x,
-        current_pos.pose[1].orientation.z,
-        current_pos.pose[1].orientation.w
-    );
-    tf::Matrix3x3 m(q);
-    m.getRPY(curr_roll, curr_pitch, curr_yaw); 
+    // Gazebo models may not spawn in order
+    get_model_order();
+
+    // Converting quaternion values to roll, pitch and yaw and sets current yaw direction
+    // Note that angles are from -180 to 180 degrees
+    quat_to_euler(current_pos);
 }
 
 int main(int argc, char **argv)
@@ -44,6 +85,8 @@ int main(int argc, char **argv)
 
     std::string followerNS= "uav0";
     std::string targetNS= "uav1";
+
+    // Currently not using state_sub and service clients. They are left there for now in case needed in future
 
     /* SUBSCRIBERS */
     ros::Subscriber state_sub = nh.subscribe<mavros_msgs::State>
@@ -74,13 +117,11 @@ int main(int argc, char **argv)
         rate.sleep();
     }
 
-    double f_curr_z = current_pos.pose[1].position.z;
-
     geometry_msgs::PoseStamped pose;
+    double f_curr_z = current_pos.pose[typhoon].position.z;
     pose.pose.position.z = f_curr_z;
 
     geometry_msgs::Twist yaw;
-    double degree_of_error = 0.1;
 
     //send a few setpoints before starting
     for(int i = 100; ros::ok() && i > 0; --i){
@@ -106,12 +147,12 @@ int main(int argc, char **argv)
             count++;
         }
 
-        double f_curr_x = current_pos.pose[1].position.x;
-        double f_curr_y = current_pos.pose[1].position.y;
-        f_curr_z = current_pos.pose[1].position.z;
+        double f_curr_x = current_pos.pose[typhoon].position.x;
+        double f_curr_y = current_pos.pose[typhoon].position.y;
+        f_curr_z = current_pos.pose[typhoon].position.z;
 
-        double t_curr_x = current_pos.pose[2].position.x;
-        double t_curr_y = current_pos.pose[2].position.y;
+        double t_curr_x = current_pos.pose[iris].position.x;
+        double t_curr_y = current_pos.pose[iris].position.y;
 
         double diff_x = t_curr_x - f_curr_x;
         double diff_y = t_curr_y - f_curr_y;
