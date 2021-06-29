@@ -35,7 +35,7 @@ gazebo_msgs::ModelStates current_pos;
 int iris = 0, typhoon = 0;
 
 double degree_of_error = 0.2;
-double curr_roll = 0, curr_pitch = 0, curr_yaw = 0, yaw_rate = 0;
+double yaw_rate = 0;
 double last_callback_time = 0, time_elapsed = 0;
 bool first_callback = true;
 
@@ -49,7 +49,7 @@ double distance_betw_points(double first_x, double first_y, double second_x, dou
 
 }
 
-void calc_yaw_rate(gazebo_msgs::ModelStates current_pos){
+void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
     target_curr_x = current_pos.pose[iris].position.x;
     target_curr_y = current_pos.pose[iris].position.y;
 
@@ -62,9 +62,35 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos){
 
     yaw_rate = acos(( pow(calc_first_target_dist,2) + pow(calc_second_target_dist,2) - pow(pred_travelled_dist,2)) / (2*calc_first_target_dist*calc_second_target_dist));
 
-    if (target_curr_x - target_prev_x >= 0){
-        // Moving to the right
-        yaw_rate = -yaw_rate;
+    // first quadrant 
+    if (curr_yaw >= 0 && curr_yaw < 1.570796f){
+        if (target_curr_x - target_prev_x >= 0 || target_curr_y - target_prev_y < 0){
+            // Moving to the right or down
+            yaw_rate = -yaw_rate;
+        }
+            
+    }
+    // second quadrant
+    else if (curr_yaw >= 1.570796f && curr_yaw < 3.141593f){
+        if (target_curr_x - target_prev_x >= 0 || target_curr_y - target_prev_y >= 0){
+            // Moving to the right or up
+            yaw_rate = -yaw_rate;
+        }
+
+    }
+    // third quadrant
+    else if (curr_yaw >= -3.141593f && curr_yaw < -1.570796f){
+        if (target_curr_x - target_prev_x < 0 || target_curr_y - target_prev_y >= 0){
+            // Moving to the left or up
+            yaw_rate = -yaw_rate;
+        }
+    }
+    // fourth quadrant
+    else{
+        if (target_curr_x - target_prev_x < 0 || target_curr_y - target_prev_y < 0){
+            // Moving to the left or down
+            yaw_rate = -yaw_rate;
+        }
     }
 
     ROS_INFO("Dist travelled: %f Yaw-rate: %f", pred_travelled_dist, yaw_rate);
@@ -85,6 +111,22 @@ void get_model_order(){
     ROS_INFO("Iris: %d Typhoon: %d", iris, typhoon);
 }
 
+double quat_to_euler(gazebo_msgs::ModelStates current_pos){
+
+    double curr_roll, curr_pitch, curr_yaw;
+
+    tf::Quaternion q(
+        current_pos.pose[typhoon].orientation.x,
+        current_pos.pose[typhoon].orientation.x,
+        current_pos.pose[typhoon].orientation.z,
+        current_pos.pose[typhoon].orientation.w
+    );
+    tf::Matrix3x3 m(q);
+    m.getRPY(curr_roll, curr_pitch, curr_yaw); 
+
+    return curr_roll, curr_pitch, curr_yaw;
+}
+
 void state_cb(const mavros_msgs::State::ConstPtr& msg){
     current_state = *msg;
 }
@@ -100,7 +142,11 @@ void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
 
             ROS_INFO("----- %f time elapsed -----", time_elapsed);
             
-            calc_yaw_rate(current_pos);
+            // Converting quaternion values to roll, pitch and yaw and sets current yaw direction
+            // Note that angles are from -180 to 180 degrees
+            double curr_roll, curr_pitch, curr_yaw = quat_to_euler(current_pos);
+
+            calc_yaw_rate(current_pos, curr_yaw);
 
             // Update current pose as the next previous pose
             target_prev_x = target_curr_x;
