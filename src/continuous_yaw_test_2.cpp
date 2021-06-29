@@ -35,7 +35,8 @@ gazebo_msgs::ModelStates current_pos;
 int iris = 0, typhoon = 0;
 
 double degree_of_error = 0.2;
-double yaw_rate = 0;
+double catchup_yawRate = 3.141593/5;
+double curr_roll = 0 , curr_pitch = 0 , curr_yaw = 0 , yaw_rate = 0;
 double last_callback_time = 0, time_elapsed = 0;
 bool first_callback = true;
 
@@ -61,6 +62,7 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
     calc_second_target_dist = distance_betw_points(target_curr_x, target_curr_y, follower_curr_x, follower_curr_y);
 
     yaw_rate = acos(( pow(calc_first_target_dist,2) + pow(calc_second_target_dist,2) - pow(pred_travelled_dist,2)) / (2*calc_first_target_dist*calc_second_target_dist));
+    ROS_INFO("Initial Yaw-rate: %f", yaw_rate);
 
     // first quadrant 
     if (curr_yaw >= 0 && curr_yaw < 1.570796f){
@@ -93,7 +95,7 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
         }
     }
 
-    ROS_INFO("Dist travelled: %f Yaw-rate: %f", pred_travelled_dist, yaw_rate);
+    ROS_INFO("Curr yaw: %f Yaw-rate: %f", curr_yaw, yaw_rate);
 }
 
 void get_model_order(){
@@ -111,9 +113,7 @@ void get_model_order(){
     ROS_INFO("Iris: %d Typhoon: %d", iris, typhoon);
 }
 
-double quat_to_euler(gazebo_msgs::ModelStates current_pos){
-
-    double curr_roll, curr_pitch, curr_yaw;
+void quat_to_euler(gazebo_msgs::ModelStates current_pos){
 
     tf::Quaternion q(
         current_pos.pose[typhoon].orientation.x,
@@ -123,8 +123,6 @@ double quat_to_euler(gazebo_msgs::ModelStates current_pos){
     );
     tf::Matrix3x3 m(q);
     m.getRPY(curr_roll, curr_pitch, curr_yaw); 
-
-    return curr_roll, curr_pitch, curr_yaw;
 }
 
 void state_cb(const mavros_msgs::State::ConstPtr& msg){
@@ -140,11 +138,11 @@ void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
 
         if (time_elapsed >= 1.0f){
 
-            ROS_INFO("----- %f time elapsed -----", time_elapsed);
+            ROS_INFO("--- %f time elapsed ---", time_elapsed);
             
             // Converting quaternion values to roll, pitch and yaw and sets current yaw direction
             // Note that angles are from -180 to 180 degrees
-            double curr_roll, curr_pitch, curr_yaw = quat_to_euler(current_pos);
+            quat_to_euler(current_pos);
 
             calc_yaw_rate(current_pos, curr_yaw);
 
@@ -210,16 +208,8 @@ int main(int argc, char **argv)
     }
 
     geometry_msgs::PoseStamped pose;
-    pose.pose.position.z = current_pos.pose[typhoon].position.z;
 
     geometry_msgs::Twist yaw;
-
-    //send a few setpoints before starting
-    for(int i = 100; ros::ok() && i > 0; --i){
-        local_pos_pub.publish(pose);
-        ros::spinOnce();
-        rate.sleep();
-    }
 
     mavros_msgs::SetMode offb_set_mode;
     offb_set_mode.request.custom_mode = "OFFBOARD";
@@ -238,14 +228,22 @@ int main(int argc, char **argv)
             count++;
         }
 
-        if (pred_travelled_dist >= 0){
-            
+        double diff_x = target_curr_x - follower_curr_x;
+        double diff_y = target_curr_y - follower_curr_y;
+        double angle_to_target = atan2 (diff_y, diff_x);
+        ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_target - curr_yaw);
+
+        if (angle_to_target - curr_yaw > degree_of_error){
             yaw.linear.x = 0;
-            yaw.angular.z = yaw_rate;
+            yaw.angular.z = catchup_yawRate;
+        }
+        else if (angle_to_target - curr_yaw < -degree_of_error){
+            yaw.linear.x = 0;
+            yaw.angular.z = -catchup_yawRate;
         }
         else{
             yaw.linear.x = 0;
-            yaw.angular.z = 0;
+            yaw.angular.z = yaw_rate;
         }
 
         last_request = ros::Time::now();
