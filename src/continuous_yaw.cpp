@@ -34,8 +34,10 @@ gazebo_msgs::ModelStates current_pos;
 
 int iris = 0, typhoon = 0;
 
-double degree_of_error = 0.2;
-double catchup_yawRate = 3.141593/5;
+const double degree_of_error = 0.2; // 0.2 rad = error of 11 degrees 
+const double catchup_yawRate = 3.141593/5; // 36 degrees per second
+const double callback_limit = 0.5; // take callback values every 0.5 seconds
+
 double curr_roll = 0 , curr_pitch = 0 , curr_yaw = 0 , yaw_rate = 0;
 double last_callback_time = 0, time_elapsed = 0;
 bool first_callback = true;
@@ -62,7 +64,10 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
     calc_second_target_dist = distance_betw_points(target_curr_x, target_curr_y, follower_curr_x, follower_curr_y);
 
     yaw_rate = acos(( pow(calc_first_target_dist,2) + pow(calc_second_target_dist,2) - pow(pred_travelled_dist,2)) / (2*calc_first_target_dist*calc_second_target_dist));
-    ROS_INFO("Initial Yaw-rate: %f", yaw_rate);
+    
+    // Since the yaw_rate is in rad/s, we have to divide by the callback_limit if callback_limit != 1s
+    yaw_rate = yaw_rate/callback_limit;
+
 
     // first quadrant 
     if (curr_yaw >= 0 && curr_yaw < 1.570796f){
@@ -95,7 +100,7 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
         }
     }
 
-    ROS_INFO("Curr yaw: %f Yaw-rate: %f", curr_yaw, yaw_rate);
+    ROS_INFO("target dist: %f Yaw-rate: %f", calc_second_target_dist, yaw_rate);
 }
 
 void get_model_order(){
@@ -136,7 +141,7 @@ void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
     if (!first_callback){
         time_elapsed = ros::Time::now().toSec() - last_callback_time;
 
-        if (time_elapsed >= 1.0f){
+        if (time_elapsed >= callback_limit){
 
             ROS_INFO("--- %f time elapsed ---", time_elapsed);
             
