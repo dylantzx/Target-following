@@ -30,13 +30,27 @@
 
 
 mavros_msgs::State current_state;
+mavros_msgs::CommandBool arm_cmd;
+mavros_msgs::SetMode offb_set_mode;
+
 gazebo_msgs::ModelStates current_pos;
+geometry_msgs::PoseStamped pose;
+geometry_msgs::Twist yaw;
 
-int iris = 0, typhoon = 0;
+ros::Subscriber state_sub;
+ros::Subscriber current_pos_sub;
+ros::Publisher local_pos_pub;
+ros::Publisher local_yaw_pub;
+ros::ServiceClient arming_client;
+ros::ServiceClient set_mode_client;
 
+const std::string followerNS= "uav0"; // namespace of uav0
+const std::string targetNS= "uav1"; // namespace of uav1
 const double degree_of_error = 0.2; // 0.2 rad = error of 11 degrees 
 const double catchup_yawRate = 3.141593/5; // 36 degrees per second
 const double callback_limit = 0.5; // take callback values every 0.5 seconds
+
+int iris = 0, typhoon = 0;
 
 double curr_roll = 0 , curr_pitch = 0 , curr_yaw = 0 , yaw_rate = 0;
 double last_callback_time = 0, time_elapsed = 0;
@@ -130,6 +144,42 @@ void quat_to_euler(gazebo_msgs::ModelStates current_pos){
     m.getRPY(curr_roll, curr_pitch, curr_yaw); 
 }
 
+void yaw_control(){
+    double diff_x = target_curr_x - follower_curr_x;
+    double diff_y = target_curr_y - follower_curr_y;
+    double angle_to_targetPose = atan2 (diff_y, diff_x);
+    double angle_to_yaw = angle_to_targetPose - curr_yaw;
+
+    // this part is to solve the transition from -180 to 180 vice versa problem.
+    // angle to yaw should not exceed -180 or 180 degrees
+    if (angle_to_yaw > 3.14159){
+        // scenario: -180 to 180 degrees
+        // eg. angle_to_yaw should be negative (-0.043 rad) but received (6.24 rad)
+        angle_to_yaw = angle_to_yaw - 6.28319; 
+    } else if (angle_to_yaw < -3.14159){
+        // scenario: 180 to -180 degrees
+        // eg. angle_to_yaw should be positive (0.043 rad) but received (-6.24 rad)
+        angle_to_yaw = 6.28319 + angle_to_yaw;
+    }
+
+    ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_yaw);
+
+    if (angle_to_yaw > degree_of_error){
+        yaw.linear.x = 0;
+        yaw.angular.z = catchup_yawRate;
+    }
+    else if (angle_to_yaw < -degree_of_error){
+        yaw.linear.x = 0;
+        yaw.angular.z = -catchup_yawRate;
+    }
+    else{
+        yaw.linear.x = 0;
+        yaw.angular.z = yaw_rate;
+    }
+
+    local_yaw_pub.publish(yaw);
+}
+
 void state_cb(const mavros_msgs::State::ConstPtr& msg){
     current_state = *msg;
 }
@@ -178,30 +228,21 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "offb_node");
     ros::NodeHandle nh;
 
-    std::string followerNS= "uav0";
-    std::string targetNS= "uav1";
-
     // Currently not using state_sub and service clients. They are left there for now in case needed in future
 
     /* SUBSCRIBERS */
-    ros::Subscriber state_sub = nh.subscribe<mavros_msgs::State>
-            (followerNS + "/mavros/state", 10, state_cb);
+    state_sub = nh.subscribe<mavros_msgs::State>(followerNS + "/mavros/state", 10, state_cb);
 
-    ros::Subscriber current_pos_sub = nh.subscribe<gazebo_msgs::ModelStates>
-            ("gazebo/model_states", 10, current_pos_cb);
+    current_pos_sub = nh.subscribe<gazebo_msgs::ModelStates>("gazebo/model_states", 10, current_pos_cb);
 
     /* PUBLISHERS */
-    ros::Publisher local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>
-            (followerNS + "/mavros/setpoint_position/local", 10);
+    local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>(followerNS + "/mavros/setpoint_position/local", 10);
 
-    ros::Publisher local_yaw_pub = nh.advertise<geometry_msgs::Twist>
-            (followerNS + "/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
+    local_yaw_pub = nh.advertise<geometry_msgs::Twist>(followerNS + "/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
 
     /* SERVICE CLIENTS */
-    ros::ServiceClient arming_client = nh.serviceClient<mavros_msgs::CommandBool>
-            (followerNS + "/mavros/cmd/arming");
-    ros::ServiceClient set_mode_client = nh.serviceClient<mavros_msgs::SetMode>
-            (followerNS + "/mavros/set_mode");
+    arming_client = nh.serviceClient<mavros_msgs::CommandBool>(followerNS + "/mavros/cmd/arming");
+    set_mode_client = nh.serviceClient<mavros_msgs::SetMode>(followerNS + "/mavros/set_mode");
 
     //the setpoint publishing rate MUST be faster than 2Hz
     ros::Rate rate(20.0);
@@ -212,17 +253,8 @@ int main(int argc, char **argv)
         rate.sleep();
     }
 
-    geometry_msgs::PoseStamped pose;
-
-    geometry_msgs::Twist yaw;
-
-    mavros_msgs::SetMode offb_set_mode;
     offb_set_mode.request.custom_mode = "OFFBOARD";
-
-    mavros_msgs::CommandBool arm_cmd;
     arm_cmd.request.value = true;
-
-    ros::Time last_request = ros::Time::now();
 
     int count = 0;
 
@@ -233,41 +265,8 @@ int main(int argc, char **argv)
             count++;
         }
 
-        double diff_x = target_curr_x - follower_curr_x;
-        double diff_y = target_curr_y - follower_curr_y;
-        double angle_to_targetPose = atan2 (diff_y, diff_x);
-        double angle_to_yaw = angle_to_targetPose - curr_yaw;
-
-        // this part is to solve the transition from -180 to 180 vice versa problem.
-        // angle to yaw should not exceed -180 or 180 degrees
-        if (angle_to_yaw > 3.14159){
-            // scenario: -180 to 180 degrees
-            // eg. angle_to_yaw should be negative (-0.043 rad) but received (6.24 rad)
-            angle_to_yaw = angle_to_yaw - 6.28319; 
-        } else if (angle_to_yaw < -3.14159){
-            // scenario: 180 to -180 degrees
-            // eg. angle_to_yaw should be positive (0.043 rad) but received (-6.24 rad)
-            angle_to_yaw = 6.28319 + angle_to_yaw;
-        }
-
-        ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_yaw);
-
-        if (angle_to_yaw > degree_of_error){
-            yaw.linear.x = 0;
-            yaw.angular.z = catchup_yawRate;
-        }
-        else if (angle_to_yaw < -degree_of_error){
-            yaw.linear.x = 0;
-            yaw.angular.z = -catchup_yawRate;
-        }
-        else{
-            yaw.linear.x = 0;
-            yaw.angular.z = yaw_rate;
-        }
-
-        last_request = ros::Time::now();
-        local_yaw_pub.publish(yaw);
-
+        yaw_control();
+        
         ros::spinOnce();
         rate.sleep();
     }
