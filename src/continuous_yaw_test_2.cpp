@@ -47,8 +47,8 @@ ros::ServiceClient set_mode_client;
 const std::string followerNS= "uav0"; // namespace of uav0
 const std::string targetNS= "uav1"; // namespace of uav1
 const double degree_of_error = 0.2; // 0.2 rad = error of 11 degrees 
-const double catchup_yawRate = 3.141593/5; // 36 degrees per second
 const double callback_limit = 0.5; // take callback values every 0.5 seconds
+const double catchup_yawRate = (3.141593/5)/ callback_limit; // 36 degrees per second
 
 int iris = 0, typhoon = 0;
 
@@ -82,10 +82,12 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
     // Since the yaw_rate is in rad/s, we have to divide by the callback_limit if callback_limit != 1s
     yaw_rate = yaw_rate/callback_limit;
 
+    double delta_x = target_curr_x - target_prev_x;
+    double delta_y = target_curr_y - target_prev_y;
 
     // first quadrant 
     if (curr_yaw >= 0 && curr_yaw < 1.570796f){
-        if (target_curr_x - target_prev_x >= 0 || target_curr_y - target_prev_y < 0){
+        if (delta_x >= 0 || delta_y < 0){
             // Moving to the right or down
             yaw_rate = -yaw_rate;
         }
@@ -93,7 +95,7 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
     }
     // second quadrant
     else if (curr_yaw >= 1.570796f && curr_yaw < 3.141593f){
-        if (target_curr_x - target_prev_x >= 0 || target_curr_y - target_prev_y >= 0){
+        if (delta_x >= 0 || delta_y >= 0){
             // Moving to the right or up
             yaw_rate = -yaw_rate;
         }
@@ -101,14 +103,14 @@ void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
     }
     // third quadrant
     else if (curr_yaw >= -3.141593f && curr_yaw < -1.570796f){
-        if (target_curr_x - target_prev_x < 0 || target_curr_y - target_prev_y >= 0){
+        if (delta_x < 0 || delta_y >= 0){
             // Moving to the left or up
             yaw_rate = -yaw_rate;
         }
     }
     // fourth quadrant
     else{
-        if (target_curr_x - target_prev_x < 0 || target_curr_y - target_prev_y < 0){
+        if (delta_x < 0 || delta_y < 0){
             // Moving to the left or down
             yaw_rate = -yaw_rate;
         }
