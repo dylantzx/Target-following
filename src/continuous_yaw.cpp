@@ -235,14 +235,28 @@ int main(int argc, char **argv)
 
         double diff_x = target_curr_x - follower_curr_x;
         double diff_y = target_curr_y - follower_curr_y;
-        double angle_to_target = atan2 (diff_y, diff_x);
-        ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_target - curr_yaw);
+        double angle_to_targetPose = atan2 (diff_y, diff_x);
+        double angle_to_yaw = angle_to_targetPose - curr_yaw;
 
-        if (angle_to_target - curr_yaw > degree_of_error){
+        // this part is to solve the transition from -180 to 180 vice versa problem.
+        // angle to yaw should not exceed -180 or 180 degrees
+        if (angle_to_yaw > 3.14159){
+            // scenario: -180 to 180 degrees
+            // eg. angle_to_yaw should be negative (-0.043 rad) but received (6.24 rad)
+            angle_to_yaw = angle_to_yaw - 6.28319; 
+        } else if (angle_to_yaw < -3.14159){
+            // scenario: 180 to -180 degrees
+            // eg. angle_to_yaw should be positive (0.043 rad) but received (-6.24 rad)
+            angle_to_yaw = 6.28319 + angle_to_yaw;
+        }
+
+        ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_yaw);
+
+        if (angle_to_yaw > degree_of_error){
             yaw.linear.x = 0;
             yaw.angular.z = catchup_yawRate;
         }
-        else if (angle_to_target - curr_yaw < -degree_of_error){
+        else if (angle_to_yaw < -degree_of_error){
             yaw.linear.x = 0;
             yaw.angular.z = -catchup_yawRate;
         }
