@@ -35,7 +35,7 @@ mavros_msgs::SetMode offb_set_mode;
 
 gazebo_msgs::ModelStates current_pos;
 geometry_msgs::PoseStamped pose;
-geometry_msgs::Twist yaw;
+geometry_msgs::TwistStamped yaw;
 
 ros::Subscriber state_sub;
 ros::Subscriber current_pos_sub;
@@ -46,7 +46,7 @@ ros::ServiceClient set_mode_client;
 
 const std::string followerNS= "uav0"; // namespace of uav0
 const std::string targetNS= "uav1"; // namespace of uav1
-const double degree_of_error = 0.2; // 0.2 rad = error of 11 degrees 
+const double degree_of_error = 0.4; // 0.4 rad = error of 11 degrees 
 const double callback_limit = 0.5; // take callback values every 0.5 seconds
 const double catchup_yawRate = (3.141593/5)/ callback_limit; // 36 degrees per second
 
@@ -146,7 +146,26 @@ void quat_to_euler(gazebo_msgs::ModelStates current_pos){
     m.getRPY(curr_roll, curr_pitch, curr_yaw); 
 }
 
+void pos_control(){
+   
+    if (calc_second_target_dist >= 15 && calc_second_target_dist < 20){
+        yaw.twist.linear.x = 0;
+    }
+    else if (calc_second_target_dist > 20){
+        yaw.twist.linear.x = pred_travelled_dist/callback_limit;
+    }
+    else if (calc_second_target_dist < -15){
+        yaw.twist.linear.x = - pred_travelled_dist/callback_limit;
+    }
+    
+}
+
 void yaw_control(){
+
+    yaw.header.stamp.sec = ros::Time::now().toSec();
+    yaw.header.stamp.nsec = ros::Time::now().toNSec();
+    yaw.header.frame_id = "base_link";
+
     double diff_x = target_curr_x - follower_curr_x;
     double diff_y = target_curr_y - follower_curr_y;
     double angle_to_targetPose = atan2 (diff_y, diff_x);
@@ -164,20 +183,20 @@ void yaw_control(){
         angle_to_yaw = 6.28319 + angle_to_yaw;
     }
 
-    ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_yaw);
-
+    // ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_yaw);
+    yaw.twist.linear.x = 0;
+    
     if (angle_to_yaw > degree_of_error){
-        yaw.linear.x = 0;
-        yaw.angular.z = catchup_yawRate;
+        yaw.twist.angular.z = catchup_yawRate;
     }
     else if (angle_to_yaw < -degree_of_error){
-        yaw.linear.x = 0;
-        yaw.angular.z = -catchup_yawRate;
+        yaw.twist.angular.z = -catchup_yawRate;
     }
     else{
-        yaw.linear.x = 0;
-        yaw.angular.z = yaw_rate;
+        yaw.twist.angular.z = yaw_rate;
     }
+
+    // pos_control();
 
     local_yaw_pub.publish(yaw);
 }
@@ -240,7 +259,7 @@ int main(int argc, char **argv)
     /* PUBLISHERS */
     local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>(followerNS + "/mavros/setpoint_position/local", 10);
 
-    local_yaw_pub = nh.advertise<geometry_msgs::Twist>(followerNS + "/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
+    local_yaw_pub = nh.advertise<geometry_msgs::TwistStamped>(followerNS + "/mavros/setpoint_velocity/cmd_vel", 10);
 
     /* SERVICE CLIENTS */
     arming_client = nh.serviceClient<mavros_msgs::CommandBool>(followerNS + "/mavros/cmd/arming");
