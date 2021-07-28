@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(continuous_yaw)
+project(Target-following)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 # add_compile_options(-std=c++11)
@@ -150,8 +150,8 @@ include_directories(
 #   ${catkin_LIBRARIES}
 # )
 
-add_executable(continuous_yaw src/continuous_yaw.cpp)
-target_link_libraries(continuous_yaw
+add_executable(Target-following src/continuous_yaw.cpp)
+target_link_libraries(Target-following
   ${catkin_LIBRARIES}
 )
 
