@@ -1,4 +1,4 @@
-# Target-following
+# target_following
 
 ## Prerequisites
 ---
@@ -22,7 +22,7 @@ This repository has target following codes with only **yaw control** based on si
 1. Clone the repository into your `catkin_ws/src/` directory
 ```
  cd ~/catkin_ws/src
- git clone https://github.com/dylantzx/Target-following.git --recursive
+ git clone https://github.com/dylantzx/target_following.git --recursive
 ```
 
 2. Compile the repository
