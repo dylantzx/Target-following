@@ -24,21 +24,23 @@
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <gazebo_msgs/ModelStates.h>
+#include <mask_rcnn_ros/Bbox_values.h>
 #include <iostream>
 #include <math.h>
 #include <tf/tf.h>
-
 
 mavros_msgs::State current_state;
 mavros_msgs::CommandBool arm_cmd;
 mavros_msgs::SetMode offb_set_mode;
 
 gazebo_msgs::ModelStates current_pos;
+mask_rcnn_ros::Bbox_values cv;
 geometry_msgs::PoseStamped pose;
 geometry_msgs::TwistStamped yaw;
 
 ros::Subscriber state_sub;
 ros::Subscriber current_pos_sub;
+ros::Subscriber cv_sub;
 ros::Publisher local_pos_pub;
 ros::Publisher local_yaw_pub;
 ros::ServiceClient arming_client;
@@ -205,6 +207,11 @@ void state_cb(const mavros_msgs::State::ConstPtr& msg){
     current_state = *msg;
 }
 
+void cv_cb(const mask_rcnn_ros::Bbox_values::ConstPtr& msg){
+    cv = *msg;
+    ROS_INFO("Current pose: x:%d y:%d w:%d h:%d", cv.x, cv.y, cv.w, cv.h);
+}
+
 void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
     double callback_time = ros::Time::now().toSec();
     current_pos = *msg;
@@ -255,6 +262,8 @@ int main(int argc, char **argv)
     state_sub = nh.subscribe<mavros_msgs::State>(followerNS + "/mavros/state", 10, state_cb);
 
     current_pos_sub = nh.subscribe<gazebo_msgs::ModelStates>("gazebo/model_states", 10, current_pos_cb);
+
+    cv_sub = nh.subscribe<mask_rcnn_ros::Bbox_values>("bbox_output", 10, cv_cb);
 
     /* PUBLISHERS */
     local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>(followerNS + "/mavros/setpoint_position/local", 10);
