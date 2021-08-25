@@ -18,7 +18,6 @@
 
 #include <ros/ros.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/TwistStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <mavros_msgs/CommandBool.h>
 #include <mavros_msgs/SetMode.h>
@@ -36,7 +35,7 @@ mavros_msgs::SetMode offb_set_mode;
 gazebo_msgs::ModelStates current_pos;
 mask_rcnn_ros::Bbox_values cv;
 geometry_msgs::PoseStamped pose;
-geometry_msgs::TwistStamped yaw;
+geometry_msgs::Twist yaw;
 
 ros::Subscriber state_sub;
 ros::Subscriber current_pos_sub;
@@ -48,77 +47,76 @@ ros::ServiceClient set_mode_client;
 
 const std::string followerNS= "uav0"; // namespace of uav0
 const std::string targetNS= "uav1"; // namespace of uav1
-const double degree_of_error = 0.4; // 0.4 rad = error of 11 degrees 
+const double degree_of_error = 0.4; // 0.4 rad = error of 23 degrees 
 const double callback_limit = 0.5; // take callback values every 0.5 seconds
-const double catchup_yawRate = (3.141593/5)/ callback_limit; // 36 degrees per second
+const double catchup_yawRate = (3.141593/8)/ callback_limit; // 22.5 degrees per second
+const double horizontal_fov = 1.0472; // fov in radians
+const int total_hor_pix = 1280; // Based on gazebo image resolution 1280 x 720 px
+const int centre_hor_pix = total_hor_pix/2; 
 
-int iris = 0, typhoon = 0;
-
-double curr_roll = 0 , curr_pitch = 0 , curr_yaw = 0 , yaw_rate = 0;
-double last_callback_time = 0, time_elapsed = 0;
 bool first_callback = true;
 
-double target_prev_x = 0, target_prev_y = 0, target_curr_x = 0, target_curr_y = 0;
-double follower_curr_x = 0, follower_curr_y = 0;
-double pred_travelled_dist = 0, calc_first_target_dist = 0, calc_second_target_dist = 0;
+/* Initialize CV centres of target drone */
+int prev_cv_centre_x = 0, prev_cv_centre_y = 0;
+int curr_cv_centre_x = 0, curr_cv_centre_y = 0;
 
-double distance_betw_points(double first_x, double first_y, double second_x, double second_y){
-   
-    return sqrt(pow((first_x - second_x),2) + pow((first_y - second_y),2));
+/* Initialize to get correct model based on gazebo model state */
+int iris = 0, typhoon = 0; 
 
-}
+double curr_roll = 0 , curr_pitch = 0 , curr_yaw = 0;
+double yaw_rate = 0;
+double last_callback_time = 0;
+double time_elapsed = 0;
 
-void calc_yaw_rate(gazebo_msgs::ModelStates current_pos, double curr_yaw){
+/* Initialize previous and current positions of target and follower drones */
+double target_prev_x = 0, target_prev_y = 0, target_prev_z = 0;
+double target_curr_x = 0, target_curr_y = 0, target_curr_z = 0;
+double follower_prev_x = 0, follower_prev_y = 0, follower_prev_z = 0;
+double follower_curr_x = 0, follower_curr_y = 0, follower_curr_z = 0;
+
+double target_dist = 0;
+double radians_to_centre = 0;
+
+void update_curr_pose(gazebo_msgs::ModelStates current_pos){
     target_curr_x = current_pos.pose[iris].position.x;
     target_curr_y = current_pos.pose[iris].position.y;
 
     follower_curr_x = current_pos.pose[typhoon].position.x;
     follower_curr_y = current_pos.pose[typhoon].position.y;
+}
 
-    pred_travelled_dist = distance_betw_points(target_prev_x, target_prev_y, target_curr_x, target_curr_y);
-    calc_first_target_dist = distance_betw_points(target_prev_x, target_prev_y, follower_curr_x, follower_curr_y);
-    calc_second_target_dist = distance_betw_points(target_curr_x, target_curr_y, follower_curr_x, follower_curr_y);
+void update_prev_pose(){
+    target_prev_x = target_curr_x;
+    target_prev_y = target_curr_y;
 
-    yaw_rate = acos(( pow(calc_first_target_dist,2) + pow(calc_second_target_dist,2) - pow(pred_travelled_dist,2)) / (2*calc_first_target_dist*calc_second_target_dist));
+    prev_cv_centre_x = curr_cv_centre_x;
+    prev_cv_centre_y = curr_cv_centre_y;
+}
+
+double calc_dist(double p1_x, double p1_y, double p2_x, double p2_y){
+   
+    return sqrt(pow((p1_x - p2_x),2) + pow((p1_y - p2_y),2));
+
+}
+
+double calc_radians_difference(double x1, double x2){
     
-    // Since the yaw_rate is in rad/s, we have to divide by the callback_limit if callback_limit != 1s
+    return (x1 - x2)/total_hor_pix * horizontal_fov;
+
+}
+
+void get_yaw_rate(){
+
+    target_dist = calc_dist(target_curr_x, target_curr_y, follower_curr_x, follower_curr_y);
+
+    yaw_rate = calc_radians_difference(curr_cv_centre_x, prev_cv_centre_x); // This is radians moved per callback limit 
+
+    // Since the yaw_rate in rad/s required, we have to divide by the callback_limit
     yaw_rate = yaw_rate/callback_limit;
 
-    double delta_x = target_curr_x - target_prev_x;
-    double delta_y = target_curr_y - target_prev_y;
+    yaw_rate = -yaw_rate; // Positive pixel difference means yaw clockwise (negative radians)
 
-    // first quadrant 
-    if (curr_yaw >= 0 && curr_yaw < 1.570796f){
-        if (delta_x >= 0 || delta_y < 0){
-            // Moving to the right or down
-            yaw_rate = -yaw_rate;
-        }
-            
-    }
-    // second quadrant
-    else if (curr_yaw >= 1.570796f && curr_yaw < 3.141593f){
-        if (delta_x >= 0 || delta_y >= 0){
-            // Moving to the right or up
-            yaw_rate = -yaw_rate;
-        }
-
-    }
-    // third quadrant
-    else if (curr_yaw >= -3.141593f && curr_yaw < -1.570796f){
-        if (delta_x < 0 || delta_y >= 0){
-            // Moving to the left or up
-            yaw_rate = -yaw_rate;
-        }
-    }
-    // fourth quadrant
-    else{
-        if (delta_x < 0 || delta_y < 0){
-            // Moving to the left or down
-            yaw_rate = -yaw_rate;
-        }
-    }
-
-    ROS_INFO("target dist: %f Yaw-rate: %f", calc_second_target_dist, yaw_rate);
+    ROS_INFO("target dist: %f Yaw-rate: %f", target_dist, yaw_rate);
 }
 
 void get_model_order(){
@@ -136,66 +134,25 @@ void get_model_order(){
     ROS_INFO("Iris: %d Typhoon: %d", iris, typhoon);
 }
 
-void quat_to_euler(gazebo_msgs::ModelStates current_pos){
-
-    tf::Quaternion q(
-        current_pos.pose[typhoon].orientation.x,
-        current_pos.pose[typhoon].orientation.x,
-        current_pos.pose[typhoon].orientation.z,
-        current_pos.pose[typhoon].orientation.w
-    );
-    tf::Matrix3x3 m(q);
-    m.getRPY(curr_roll, curr_pitch, curr_yaw); 
-}
-
 void pos_control(){
-   
-    if (calc_second_target_dist >= 15 && calc_second_target_dist < 20){
-        yaw.twist.linear.x = 0;
-    }
-    else if (calc_second_target_dist > 20){
-        yaw.twist.linear.x = pred_travelled_dist/callback_limit;
-    }
-    else if (calc_second_target_dist < -15){
-        yaw.twist.linear.x = - pred_travelled_dist/callback_limit;
-    }
     
 }
 
 void yaw_control(){
 
-    yaw.header.stamp.sec = ros::Time::now().toSec();
-    yaw.header.stamp.nsec = ros::Time::now().toNSec();
-    yaw.header.frame_id = "base_link";
-
-    double diff_x = target_curr_x - follower_curr_x;
-    double diff_y = target_curr_y - follower_curr_y;
-    double angle_to_targetPose = atan2 (diff_y, diff_x);
-    double angle_to_yaw = angle_to_targetPose - curr_yaw;
-
-    // this part is to solve the transition from -180 to 180 vice versa problem.
-    // angle to yaw should not exceed -180 or 180 degrees
-    if (angle_to_yaw > 3.14159){
-        // scenario: -180 to 180 degrees
-        // eg. angle_to_yaw should be negative (-0.043 rad) but received (6.24 rad)
-        angle_to_yaw = angle_to_yaw - 6.28319; 
-    } else if (angle_to_yaw < -3.14159){
-        // scenario: 180 to -180 degrees
-        // eg. angle_to_yaw should be positive (0.043 rad) but received (-6.24 rad)
-        angle_to_yaw = 6.28319 + angle_to_yaw;
-    }
-
-    // ROS_INFO("Curr yaw: %f Angle to target: %f", curr_yaw, angle_to_yaw);
-    yaw.twist.linear.x = 0;
+    yaw.linear.x = 0;
     
-    if (angle_to_yaw > degree_of_error){
-        yaw.twist.angular.z = catchup_yawRate;
+    if (radians_to_centre > degree_of_error){
+        ROS_INFO("Catch up clockwise %f", radians_to_centre);
+        yaw.angular.z = -catchup_yawRate;
     }
-    else if (angle_to_yaw < -degree_of_error){
-        yaw.twist.angular.z = -catchup_yawRate;
+    else if (radians_to_centre < -degree_of_error){
+        ROS_INFO("Catch up anti-clockwise %f", radians_to_centre);
+        yaw.angular.z = catchup_yawRate;
     }
     else{
-        yaw.twist.angular.z = yaw_rate;
+        ROS_INFO("Following target speed");
+        yaw.angular.z = yaw_rate;
     }
 
     // pos_control();
@@ -208,13 +165,20 @@ void state_cb(const mavros_msgs::State::ConstPtr& msg){
 }
 
 void cv_cb(const mask_rcnn_ros::Bbox_values::ConstPtr& msg){
-    cv = *msg;
-    ROS_INFO("Current pose: x:%d y:%d w:%d h:%d", cv.x, cv.y, cv.w, cv.h);
-}
 
-void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
     double callback_time = ros::Time::now().toSec();
-    current_pos = *msg;
+    cv = *msg;
+
+    // Set current centre of target in pixels
+    // Have to filter so that I do not set the curr cv pos as (0,0) if there are no tracked bbox
+    if (cv.x != 0 && cv.y != 0){
+        curr_cv_centre_x = int(cv.x + cv.w/2);
+        curr_cv_centre_y = int (cv.y + cv.h/2);
+    }
+
+    radians_to_centre = calc_radians_difference(curr_cv_centre_x, centre_hor_pix);
+
+    ROS_INFO("Radians to centre: %f", radians_to_centre);
 
     if (!first_callback){
         time_elapsed = ros::Time::now().toSec() - last_callback_time;
@@ -222,16 +186,14 @@ void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
         if (time_elapsed >= callback_limit){
 
             ROS_INFO("--- %f time elapsed ---", time_elapsed);
-            
-            // Converting quaternion values to roll, pitch and yaw and sets current yaw direction
-            // Note that angles are from -180 to 180 degrees
-            quat_to_euler(current_pos);
 
-            calc_yaw_rate(current_pos, curr_yaw);
+            get_yaw_rate();
 
-            // Update current pose as the next previous pose
-            target_prev_x = target_curr_x;
-            target_prev_y = target_curr_y;
+            ROS_INFO("Prev cv pose: (%d,%d)", prev_cv_centre_x, prev_cv_centre_y);
+            ROS_INFO("Curr cv pose: (%d,%d)", curr_cv_centre_x, curr_cv_centre_y);
+
+            // Use current pose as the next previous pose
+            update_prev_pose();
 
             last_callback_time = callback_time;
         }
@@ -239,14 +201,23 @@ void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
 
     else
     {
-        // Gazebo models may not spawn in order
-        get_model_order();
-
         // Initialize "first" pose of target
-        target_prev_x = current_pos.pose[iris].position.x;
-        target_prev_y = current_pos.pose[iris].position.y;
+        update_prev_pose();
 
         first_callback = false;
+    }
+
+}
+
+void current_pos_cb(const gazebo_msgs::ModelStates::ConstPtr& msg){
+    current_pos = *msg;
+
+    // Gazebo coordinates
+    update_curr_pose(current_pos);
+
+    if (iris == 0 && typhoon == 0){
+        // Gazebo models may not spawn in order
+        get_model_order();
     }
 
 }
@@ -268,7 +239,7 @@ int main(int argc, char **argv)
     /* PUBLISHERS */
     local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>(followerNS + "/mavros/setpoint_position/local", 10);
 
-    local_yaw_pub = nh.advertise<geometry_msgs::TwistStamped>(followerNS + "/mavros/setpoint_velocity/cmd_vel", 10);
+    local_yaw_pub = nh.advertise<geometry_msgs::Twist>(followerNS + "/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
 
     /* SERVICE CLIENTS */
     arming_client = nh.serviceClient<mavros_msgs::CommandBool>(followerNS + "/mavros/cmd/arming");
