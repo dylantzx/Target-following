@@ -47,10 +47,17 @@ ros::ServiceClient set_mode_client;
 
 const std::string followerNS= "uav0"; // namespace of uav0
 const std::string targetNS= "uav1"; // namespace of uav1
+
+/*PID controllers constants*/
+const double Kp = 1.1, Ki = 0.5, Kd = 1.0; // Ki is not used as we are only using a PD controller
+const double pi = 3.141593;
+const double locked_distance_btw = 15.0;
+const double degree_of_error_dist = 5.0;
 const double degree_of_error = 0.4; // 0.4 rad = error of 23 degrees 
 const double callback_limit = 0.5; // take callback values every 0.5 seconds
-const double catchup_yawRate = (3.141593/8)/ callback_limit; // 22.5 degrees per second
+const double catchup_yawRate = (pi/8)/ callback_limit; // 22.5 degrees per second
 const double horizontal_fov = 1.0472; // fov in radians
+
 const int total_hor_pix = 1280; // Based on gazebo image resolution 1280 x 720 px
 const int centre_hor_pix = total_hor_pix/2; 
 
@@ -63,8 +70,7 @@ int curr_cv_centre_x = 0, curr_cv_centre_y = 0;
 /* Initialize to get correct model based on gazebo model state */
 int iris = 0, typhoon = 0; 
 
-double curr_roll = 0 , curr_pitch = 0 , curr_yaw = 0;
-double yaw_rate = 0;
+/* These variables are to limit the rate at which to update the variables*/
 double last_callback_time = 0;
 double time_elapsed = 0;
 
@@ -76,6 +82,9 @@ double follower_curr_x = 0, follower_curr_y = 0, follower_curr_z = 0;
 
 double target_dist = 0;
 double radians_to_centre = 0;
+
+double proportional = 0, integral = 0, differential = 0;
+double error_yaw = 0, error_yaw_prev = 0, yaw_rate = 0;
 
 void update_curr_pose(gazebo_msgs::ModelStates current_pos){
     target_curr_x = current_pos.pose[iris].position.x;
@@ -91,6 +100,8 @@ void update_prev_pose(){
 
     prev_cv_centre_x = curr_cv_centre_x;
     prev_cv_centre_y = curr_cv_centre_y;
+
+    error_yaw_prev = error_yaw;
 }
 
 double calc_dist(double p1_x, double p1_y, double p2_x, double p2_y){
@@ -105,18 +116,15 @@ double calc_radians_difference(double x1, double x2){
 
 }
 
-void get_yaw_rate(){
+void get_error_yaw(){
 
     target_dist = calc_dist(target_curr_x, target_curr_y, follower_curr_x, follower_curr_y);
 
-    yaw_rate = calc_radians_difference(curr_cv_centre_x, prev_cv_centre_x); // This is radians moved per callback limit 
+    error_yaw = calc_radians_difference(curr_cv_centre_x, prev_cv_centre_x); // This is radians moved per callback limit 
 
-    // Since the yaw_rate in rad/s required, we have to divide by the callback_limit
-    yaw_rate = yaw_rate/callback_limit;
+    error_yaw = -error_yaw; // Positive pixel difference means yaw clockwise (negative radians)
 
-    yaw_rate = -yaw_rate; // Positive pixel difference means yaw clockwise (negative radians)
-
-    ROS_INFO("target dist: %f Yaw-rate: %f", target_dist, yaw_rate);
+    ROS_INFO("target dist: %f Error yaw: %f", target_dist, error_yaw);
 }
 
 void get_model_order(){
@@ -141,18 +149,48 @@ void pos_control(){
 void yaw_control(){
 
     yaw.linear.x = 0;
+
+    // Since yaw_rate is in rad/s, we have to divide by the callback_limit
+    yaw_rate = error_yaw/callback_limit;
     
     if (radians_to_centre > degree_of_error){
-        ROS_INFO("Catch up clockwise %f", radians_to_centre);
+        // ROS_INFO("Catch up clockwise %f", radians_to_centre);
         yaw.angular.z = -catchup_yawRate;
     }
     else if (radians_to_centre < -degree_of_error){
-        ROS_INFO("Catch up anti-clockwise %f", radians_to_centre);
+        // ROS_INFO("Catch up anti-clockwise %f", radians_to_centre);
         yaw.angular.z = catchup_yawRate;
     }
     else{
-        ROS_INFO("Following target speed");
+        // ROS_INFO("Following target speed");
         yaw.angular.z = yaw_rate;
+    }
+
+    // pos_control();
+
+    local_yaw_pub.publish(yaw);
+}
+
+void yaw_control_pid(){
+
+    yaw.linear.x = 0;
+
+    proportional = Kp * error_yaw;
+    differential = Kd* (error_yaw - error_yaw_prev)/callback_limit;
+
+    double output = proportional + differential;
+    
+    if (radians_to_centre > degree_of_error){
+        // ROS_INFO("Catch up clockwise %f", radians_to_centre);
+        yaw.angular.z = -catchup_yawRate;
+    }
+    else if (radians_to_centre < -degree_of_error){
+        // ROS_INFO("Catch up anti-clockwise %f", radians_to_centre);
+        yaw.angular.z = catchup_yawRate;
+    }
+    else{
+        // ROS_INFO("Following target speed");
+        yaw.angular.z = output;
     }
 
     // pos_control();
@@ -178,7 +216,7 @@ void cv_cb(const mask_rcnn_ros::Bbox_values::ConstPtr& msg){
 
     radians_to_centre = calc_radians_difference(curr_cv_centre_x, centre_hor_pix);
 
-    ROS_INFO("Radians to centre: %f", radians_to_centre);
+    // ROS_INFO("Radians to centre: %f", radians_to_centre);
 
     if (!first_callback){
         time_elapsed = ros::Time::now().toSec() - last_callback_time;
@@ -187,10 +225,10 @@ void cv_cb(const mask_rcnn_ros::Bbox_values::ConstPtr& msg){
 
             ROS_INFO("--- %f time elapsed ---", time_elapsed);
 
-            get_yaw_rate();
+            get_error_yaw();
 
-            ROS_INFO("Prev cv pose: (%d,%d)", prev_cv_centre_x, prev_cv_centre_y);
-            ROS_INFO("Curr cv pose: (%d,%d)", curr_cv_centre_x, curr_cv_centre_y);
+            // ROS_INFO("Prev cv pose: (%d,%d)", prev_cv_centre_x, prev_cv_centre_y);
+            // ROS_INFO("Curr cv pose: (%d,%d)", curr_cv_centre_x, curr_cv_centre_y);
 
             // Use current pose as the next previous pose
             update_prev_pose();
@@ -266,7 +304,7 @@ int main(int argc, char **argv)
             count++;
         }
 
-        yaw_control();
+        yaw_control_pid();
         
         ros::spinOnce();
         rate.sleep();
