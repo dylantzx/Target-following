@@ -55,6 +55,21 @@ This repository has target following codes with only **yaw control** based on si
 
 6. Move vehicle 2 around to see the target following
 
+## How to use keyboard teleop to move the target drone
+---
+1. Install `teleop_twist_keyboard`:
 
+    `sudo apt-get install ros-melodic-teleop-twist-keyboard`
+
+2. Run the `teleop_twist_keyboard`:
+ 
+    - Ensure that you have remapped `/cmd_vel` to a topic of `geometric_msgs/Twist` type
+    
+    - set the `_repeat_rate` to at least **20Hz** so that you can go info `offboard mode`.
+
+    - `rosrun teleop_twist_keyboard teleop_twist_keyboard.py cmd_vel:=/uav1/mavros/setpoint_velocity/cmd_vel_unstamped _repeat_rate:=20.0`
+
+3. In QGroundControl, change vehicle 2 to offboard mode.
+4. Fly the drone with keyboard controls in the same terminal that ran the `teleop_twist_keyboard`.
 
 
