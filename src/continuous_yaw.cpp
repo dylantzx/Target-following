@@ -22,6 +22,7 @@
 #include <mavros_msgs/CommandBool.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
+#include <mavros_msgs/PositionTarget.h>
 #include <gazebo_msgs/ModelStates.h>
 #include <mask_rcnn_ros/Bbox_values.h>
 #include <iostream>
@@ -31,6 +32,8 @@
 mavros_msgs::State current_state;
 mavros_msgs::CommandBool arm_cmd;
 mavros_msgs::SetMode offb_set_mode;
+mavros_msgs::PositionTarget raw;
+mavros_msgs::PositionTarget::_type_mask_type upper4bitsOn = 61440u;
 
 gazebo_msgs::ModelStates current_pos;
 mask_rcnn_ros::Bbox_values cv;
@@ -42,6 +45,7 @@ ros::Subscriber current_pos_sub;
 ros::Subscriber cv_sub;
 ros::Publisher local_pos_pub;
 ros::Publisher local_yaw_pub;
+ros::Publisher local_raw_pub;
 ros::ServiceClient arming_client;
 ros::ServiceClient set_mode_client;
 
@@ -49,13 +53,11 @@ const std::string followerNS= "uav0"; // namespace of uav0
 const std::string targetNS= "uav1"; // namespace of uav1
 
 /*PID controllers constants*/
-const double Kp = 1.1, Ki = 0.5, Kd = 1.0; // Ki is not used as we are only using a PD controller
+const double Kp = 1.2, Ki = 1.0, Kd = 1.0; // Ki is not used as we are only using a PD controller
 const double pi = 3.141593;
-const double locked_distance_btw = 15.0;
-const double degree_of_error_dist = 5.0;
 const double degree_of_error = 0.4; // 0.4 rad = error of 23 degrees 
-const double callback_limit = 0.5; // take callback values every 0.5 seconds
-const double catchup_yawRate = (pi/8)/ callback_limit; // 22.5 degrees per second
+const double callback_limit = 1.0; // take callback values every _ seconds
+const double catchup_yawRate = (pi/3.5)/ callback_limit; // _ degrees per second
 const double horizontal_fov = 1.0472; // fov in radians
 
 const int total_hor_pix = 1280; // Based on gazebo image resolution 1280 x 720 px
@@ -101,7 +103,6 @@ void update_prev_pose(){
     prev_cv_centre_x = curr_cv_centre_x;
     prev_cv_centre_y = curr_cv_centre_y;
 
-    error_yaw_prev = error_yaw;
 }
 
 double calc_dist(double p1_x, double p1_y, double p2_x, double p2_y){
@@ -120,9 +121,9 @@ void get_error_yaw(){
 
     target_dist = calc_dist(target_curr_x, target_curr_y, follower_curr_x, follower_curr_y);
 
-    error_yaw = calc_radians_difference(curr_cv_centre_x, prev_cv_centre_x); // This is radians moved per callback limit 
+    error_yaw_prev = error_yaw;
 
-    error_yaw = -error_yaw; // Positive pixel difference means yaw clockwise (negative radians)
+    error_yaw = calc_radians_difference(curr_cv_centre_x, prev_cv_centre_x); // This is radians moved per callback limit 
 
     ROS_INFO("target dist: %f Error yaw: %f", target_dist, error_yaw);
 }
@@ -177,19 +178,25 @@ void yaw_control_pid(){
 
     proportional = Kp * error_yaw;
     differential = Kd* (error_yaw - error_yaw_prev)/callback_limit;
+    ROS_INFO("Proportional: %f", proportional);
+    ROS_INFO("Differential: %f", differential);
 
     double output = proportional + differential;
+
+    // Positive pixel difference means yaw clockwise (negative radians)
+    // Need to divide again because output has to be in rad/s
+    output = - output/ callback_limit; 
     
     if (radians_to_centre > degree_of_error){
-        // ROS_INFO("Catch up clockwise %f", radians_to_centre);
+        ROS_INFO("Catch up clockwise %f", radians_to_centre);
         yaw.angular.z = -catchup_yawRate;
     }
     else if (radians_to_centre < -degree_of_error){
-        // ROS_INFO("Catch up anti-clockwise %f", radians_to_centre);
+        ROS_INFO("Catch up anti-clockwise %f", radians_to_centre);
         yaw.angular.z = catchup_yawRate;
     }
     else{
-        // ROS_INFO("Following target speed");
+        ROS_INFO("Following target speed %f", output);
         yaw.angular.z = output;
     }
 
@@ -216,7 +223,7 @@ void cv_cb(const mask_rcnn_ros::Bbox_values::ConstPtr& msg){
 
     radians_to_centre = calc_radians_difference(curr_cv_centre_x, centre_hor_pix);
 
-    // ROS_INFO("Radians to centre: %f", radians_to_centre);
+    ROS_INFO("Radians to centre: %f", radians_to_centre);
 
     if (!first_callback){
         time_elapsed = ros::Time::now().toSec() - last_callback_time;
@@ -279,6 +286,8 @@ int main(int argc, char **argv)
 
     local_yaw_pub = nh.advertise<geometry_msgs::Twist>(followerNS + "/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
 
+    local_raw_pub = nh.advertise<mavros_msgs::PositionTarget>(followerNS + "/mavros/setpoint_raw/local", 10);
+
     /* SERVICE CLIENTS */
     arming_client = nh.serviceClient<mavros_msgs::CommandBool>(followerNS + "/mavros/cmd/arming");
     set_mode_client = nh.serviceClient<mavros_msgs::SetMode>(followerNS + "/mavros/set_mode");
@@ -307,7 +316,8 @@ int main(int argc, char **argv)
         yaw_control_pid();
         
         ros::spinOnce();
-        rate.sleep();
+        // rate.sleep();
+        ros::Duration(1.0).sleep(); // Sleep for a second
     }
 
     return 0;
