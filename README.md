@@ -13,12 +13,13 @@ ROS Melodic
 ## About
 ---
 This repository has target following codes with only **yaw control** based on simple algorithms of:
-1. Finding the angle required to yaw then yaw at a constant speed to face the target. [continuous_yaw_test_1.cpp]
-2. Using the distance travelled by the target in a second, as the predicted distance travelled in the next second. Then find angle required to yaw based off cosine rule. [continuous_yaw_test_2.cpp]
-3. Similar to `continuous_yaw_test_2.cpp` but attempts to control forward and backward movement (incomplete) [continuous_yaw.cpp]
-4. Using the calculated angle, based on bounding box values received via object tracking [continuous_yaw.cpp] 
+1. [continuous_yaw_test_1.cpp] Finding the angle required to yaw then yaw at a constant speed to face the target. 
+2. [continuous_yaw_test_2.cpp] Using the distance travelled by the target in a second, as the predicted distance travelled in the next second. Then find angle required to yaw based off cosine rule. 
+3. [continuous_yaw_test_3.cpp] Similar to `continuous_yaw_test_2.cpp` but attempts to control forward and backward movement (incomplete) 
+4. [continuous_yaw_test_4.cpp] Implemented with CV where the algorithm uses the calculated angle traversed by the target, based on the bounding box values received via object tracking, to yaw and follow the target.
+5. [continuous_yaw.cpp] Implemented with CV where the algorithm uses a PD controller and the bounding box values received via object tracking, to yaw and follow the target. 
 
-**Values are currently based off ground-truth gazebo values.**
+**Some values are currently based off ground-truth gazebo values.**
 
 ## How to use the codes
 ---
@@ -43,7 +44,7 @@ This repository has target following codes with only **yaw control** based on si
     rosrun target_following target_following
     ```
 
-    If you want to run the other files,
+    If you want to run the other continuous_yaw files,
 
         1. Change the filename in `CMakeLists.txt` under `add_executable(target_following src/continuous_yaw.cpp)` in line 153
         
@@ -63,13 +64,13 @@ This repository has target following codes with only **yaw control** based on si
 
 2. Run the `teleop_twist_keyboard`:
  
-    - Ensure that you have remapped `/cmd_vel` to a topic of `geometric_msgs/Twist` type
+    - Ensure that you have remapped `/cmd_vel` to a topic of `geometric_msgs/Twist` type, to the vehicle you want to teleop
     
-    - set the `_repeat_rate` to at least **20Hz** so that you can go info `offboard mode`.
+    - Set the `_repeat_rate` to at least **20Hz** so that you can go info `offboard mode`.
 
     - `rosrun teleop_twist_keyboard teleop_twist_keyboard.py cmd_vel:=/uav1/mavros/setpoint_velocity/cmd_vel_unstamped _repeat_rate:=20.0`
 
-3. In QGroundControl, change vehicle 2 to offboard mode.
-4. Fly the drone with keyboard controls in the same terminal that ran the `teleop_twist_keyboard`.
+3. In QGroundControl, change vehicle 2 (vehicle that you are controlling) to offboard mode.
+4. Fly the drone with keyboard controls in the same terminal that ran the `teleop_twist_keyboard`. Instructions are shown in the terminal.
 
 
